@@ -1,0 +1,15 @@
+# Core application
+streamlit
+torch
+transformers==4.52.4
+bitsandbytes
+
+# PDF processing and RAG
+pypdf
+faiss-cpu
+langchain-community
+langchain-core
+langchain-classic
+langchain-text-splitters
+langchain-huggingface
+sentence-transformers
