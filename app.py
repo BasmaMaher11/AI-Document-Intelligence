@@ -131,6 +131,56 @@ st.markdown("""
 }
 
 
+/* SOURCE EXPANDERS — keep the header and passage readable in dark mode */
+[data-testid="stExpander"] {
+    background: #120D1B !important;
+    border: 1px solid rgba(168, 85, 247, 0.24) !important;
+    border-radius: 12px !important;
+    overflow: hidden;
+}
+
+[data-testid="stExpander"] details {
+    background: #120D1B !important;
+}
+
+[data-testid="stExpander"] summary {
+    background: #21172E !important;
+    color: #F5F3FF !important;
+}
+
+[data-testid="stExpander"] summary:hover {
+    background: #2B1C3D !important;
+}
+
+[data-testid="stExpander"] summary p,
+[data-testid="stExpander"] summary span,
+[data-testid="stExpander"] summary svg {
+    color: #F5F3FF !important;
+    fill: #F5F3FF !important;
+}
+
+[data-testid="stExpander"] [data-testid="stExpanderDetails"] {
+    background: #120D1B !important;
+    color: #EDE7F5 !important;
+    padding-top: 12px;
+}
+
+[data-testid="stExpander"] [data-testid="stMarkdownContainer"],
+[data-testid="stExpander"] [data-testid="stMarkdownContainer"] p,
+[data-testid="stExpander"] [data-testid="stText"],
+[data-testid="stExpander"] pre {
+    color: #EDE7F5 !important;
+}
+
+[data-testid="stExpander"] pre {
+    background: #191222 !important;
+    border: 1px solid rgba(168, 85, 247, 0.14);
+    border-radius: 8px;
+    padding: 12px !important;
+    white-space: pre-wrap !important;
+    overflow-wrap: anywhere;
+}
+
 /* CARDS */
 
 .glass-card {
@@ -514,10 +564,11 @@ You are a helpful document assistant.
 Answer the question using ONLY the information
 provided in the context.
 
-If the answer is not available in the context,
-say:
-
+If the answer is not available in the context, say exactly:
 "I could not find the answer in the provided document."
+
+Do not invent facts, page numbers, quotations, or sources.
+Use only the supplied context.
 
 Context:
 {context}
@@ -542,18 +593,28 @@ prompt = PromptTemplate(
 # ============================================================
 
 def ask_question(query, vectordb):
-
+    # Retrieve the most relevant chunks from the uploaded PDF.
     docs = vectordb.similarity_search(query, k=3)
 
-    context = "\n\n".join(
-        [
-            (
-                f"[Page {doc.metadata.get('page', 'Unknown')}]"
-                f"\n{doc.page_content}"
-            )
-            for doc in docs
-        ]
-    )
+    # Keep the original text and page number for transparent citations.
+    context_parts = []
+    sources = []
+
+    for doc in docs:
+        page_index = doc.metadata.get("page")
+        page_number = page_index + 1 if isinstance(page_index, int) else "Unknown"
+        passage = doc.page_content.strip()
+
+        context_parts.append(
+            f"[Source: Page {page_number}]\\n{passage}"
+        )
+
+        sources.append({
+            "page": page_number,
+            "text": passage
+        })
+
+    context = "\\n\\n".join(context_parts)
 
     formatted_prompt = prompt.format(
         context=context,
@@ -562,23 +623,21 @@ def ask_question(query, vectordb):
 
     result = generate_text(
         formatted_prompt,
-        max_new_tokens=150
+        max_new_tokens=200
     )
 
     try:
         parsed_result = output_parser.parse(result)
     except Exception:
-        parsed_result = {"answer": result}
+        parsed_result = {"answer": result.strip()}
 
-    sources = sorted(
-        set(
-            doc.metadata.get("page", 0) + 1
-            for doc in docs
-            if doc.metadata.get("page") is not None
-        )
-    )
+    answer_text = str(parsed_result.get("answer", "")).strip()
 
-    return parsed_result, sources
+    if not answer_text:
+        answer_text = "I could not generate an answer from the retrieved passages."
+
+    # Return both page numbers and the exact retrieved passages.
+    return answer_text, sources
 
 
 # ============================================================
@@ -741,12 +800,11 @@ if uploaded_file is not None:
 
                 vectordb, chunks = create_vector_database(temp_path)
 
-                total_pages = len(
-                    set(
-                        doc.metadata.get("page", 0)
-                        for doc in chunks
-                    )
-                )
+                total_pages = len({
+                    doc.metadata.get("page")
+                    for doc in chunks
+                    if doc.metadata.get("page") is not None
+                })
 
                 st.session_state.vectordb = vectordb
                 st.session_state.chunks = chunks
@@ -850,10 +908,7 @@ if uploaded_file is not None:
 
                     st.session_state.qa_history.append({
                         "question": question.strip(),
-                        "answer": answer.get(
-                            "answer",
-                            "No answer was generated."
-                        ),
+                        "answer": answer,
                         "sources": sources
                     })
 
@@ -895,24 +950,30 @@ if uploaded_file is not None:
                 """
 <div class="section-title">📚 Sources</div>
 <div class="section-subtitle">
-    Relevant pages used to generate the answer.
+    Open each source to view the page number and the original retrieved passage.
 </div>
 """,
                 unsafe_allow_html=True
             )
 
             if item["sources"]:
-                for page in item["sources"]:
-                    st.markdown(
-                        f"""
-<div class="source-box">
-    📄 &nbsp; Page {page}
-</div>
-""",
-                        unsafe_allow_html=True
-                    )
+                for source_index, source in enumerate(item["sources"], start=1):
+                    page = source.get("page", "Unknown")
+                    passage = source.get("text", "").strip()
+
+                    with st.expander(
+                        f"📄 Source {source_index} — Page {page}",
+                        expanded=(source_index == 1)
+                    ):
+                        st.markdown("**Original passage retrieved from the PDF:**")
+                        if passage:
+                            # st.text displays the retrieved passage as text,
+                            # without interpreting it as HTML or Markdown.
+                            st.text(passage)
+                        else:
+                            st.caption("No text was available for this source passage.")
             else:
-                st.caption("No source pages were identified.")
+                st.caption("No source passages were retrieved for this answer.")
 
             st.divider()
 
